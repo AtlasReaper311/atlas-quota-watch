@@ -1,0 +1,19 @@
+{
+  "name": "atlas-quota-watch",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node --check src/index.js && node --check src/_meta.js && node --check src/notify.js",
+    "test": "node --test",
+    "validate": "npm run check && npm test && wrangler deploy --dry-run --env=\"\" --outdir dist",
+    "dev": "wrangler dev --env dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

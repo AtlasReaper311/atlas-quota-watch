@@ -1,0 +1,51 @@
+name = "atlas-quota-watch"
+main = "src/index.js"
+compatibility_date = "2026-07-13"
+account_id = "49e221b7e55a9e5c45b88d08efca5771"
+workers_dev = false
+
+routes = [
+  { pattern = "api.atlas-systems.uk/quota*", zone_id = "8ba6350a78c988447c111048b125f917" }
+]
+
+[triggers]
+crons = ["45 6 * * *"]
+
+[observability]
+enabled = true
+
+[[services]]
+binding = "ATLAS_NOTIFY"
+service = "atlas-notify"
+
+[vars]
+CF_ACCOUNT_TAG = "49e221b7e55a9e5c45b88d08efca5771"
+BILLING_ANCHOR_DAY = "2"
+WARN_THRESHOLD_PCT = "80"
+NOTIFY_SIGNAL_CLASS = "infra_health"
+LIMIT_WORKERS_REQUESTS_MONTH = "10000000"
+LIMIT_KV_READS_MONTH = "10000000"
+LIMIT_KV_WRITES_MONTH = "1000000"
+LIMIT_KV_DELETES_MONTH = "1000000"
+LIMIT_KV_LISTS_MONTH = "1000000"
+LIMIT_KV_STORAGE_BYTES = "1073741824"
+
+[env.dev]
+workers_dev = true
+
+[[env.dev.services]]
+binding = "ATLAS_NOTIFY"
+service = "atlas-notify"
+
+[env.dev.vars]
+CF_ACCOUNT_TAG = "49e221b7e55a9e5c45b88d08efca5771"
+BILLING_ANCHOR_DAY = "2"
+WARN_THRESHOLD_PCT = "80"
+NOTIFY_SIGNAL_CLASS = "infra_health"
+NOTIFY_URL = "https://api.atlas-systems.uk/notify"
+LIMIT_WORKERS_REQUESTS_MONTH = "10000000"
+LIMIT_KV_READS_MONTH = "10000000"
+LIMIT_KV_WRITES_MONTH = "1000000"
+LIMIT_KV_DELETES_MONTH = "1000000"
+LIMIT_KV_LISTS_MONTH = "1000000"
+LIMIT_KV_STORAGE_BYTES = "1073741824"
