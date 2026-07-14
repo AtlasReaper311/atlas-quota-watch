@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.atlas-systems.uk/atlas-quota-watch/quota-snapshot/v1",
+  "title": "Atlas cost-guard quota snapshot v1",
+  "description": "One redacted, read-only quota observation for offline cost assurance.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "service_id",
+    "provider",
+    "quota_type",
+    "observed_at",
+    "period_start",
+    "period_end",
+    "usage",
+    "quota_limit",
+    "availability",
+    "source",
+    "confidence",
+    "classification"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "atlas-cost-guard/quota-snapshot/v1"
+    },
+    "service_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+    "provider": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+    "quota_type": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "period_start": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "period_end": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "usage": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "quota_limit": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "previous_period_usage": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "contributors": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "usage"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "usage": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "availability": {
+      "enum": ["available", "unavailable"]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "collected_by"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "maxLength": 64
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "collected_by": {
+          "const": "AtlasReaper311/atlas-quota-watch"
+        }
+      }
+    },
+    "confidence": {
+      "enum": ["high", "medium", "low", "unknown"]
+    },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lifecycle", "scope", "provenance"],
+      "properties": {
+        "lifecycle": {
+          "enum": [
+            "production",
+            "active",
+            "experimental",
+            "deprecated",
+            "archived"
+          ]
+        },
+        "scope": {
+          "enum": ["public", "internal"]
+        },
+        "provenance": {
+          "enum": ["original", "external-derived"]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "availability": {
+            "const": "unavailable"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "usage": {
+            "const": null
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "availability": {
+            "const": "available"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "usage": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  ]
+}

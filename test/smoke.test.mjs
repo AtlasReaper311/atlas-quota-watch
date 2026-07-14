@@ -49,9 +49,22 @@ test("a gauge meter never breaches on projection, only on threshold", () => {
   };
   const early = analyzeMeter(gauge, 2, 30, 0.8);
   assert.equal(early.breach, false, "static storage early in the period is not a runaway");
+  assert.equal(early.level, "healthy", "a healthy gauge is not labelled as a warning");
   assert.equal(early.projected_end_of_period, null);
   const full = analyzeMeter({ ...gauge, usage: 900 * 1024 * 1024 }, 2, 30, 0.8);
   assert.equal(full.breach, true, "a genuinely full store still breaches the threshold");
+});
+
+test("a healthy cumulative meter is not labelled as a warning", () => {
+  const meter = {
+    id: "workers_requests",
+    label: "x",
+    usage: 100000,
+    limit: 10000000,
+  };
+  const result = analyzeMeter(meter, 20, 30, 0.8);
+  assert.equal(result.breach, false);
+  assert.equal(result.level, "healthy");
 });
 
 

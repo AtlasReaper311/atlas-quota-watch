@@ -1,0 +1,73 @@
+{
+  "schema_version": "atlas-cost-guard/policy/v1",
+  "owner": "AtlasReaper311/atlas-infra",
+  "finding_contract": "contracts/v1/finding.schema.json",
+  "evidence_contract": "contracts/v1/evidence-envelope.schema.json",
+  "defaults": {
+    "notification_enabled": false,
+    "issue_creation_allowed": false,
+    "advisory_only": true
+  },
+  "services": [
+    {
+      "service_id": "atlas-quota-watch",
+      "repository": "AtlasReaper311/atlas-quota-watch",
+      "provider": "cloudflare",
+      "quota_type": "workers-requests",
+      "unit": "requests",
+      "measurement_mode": "cumulative",
+      "free_tier_limit": 10000000,
+      "warning_threshold_pct": 80,
+      "critical_threshold_pct": 95,
+      "projection_horizon_days": 7,
+      "cooldown_hours": 24,
+      "max_data_age_hours": 26,
+      "acceleration_threshold_pct": 50,
+      "owner": "AtlasReaper311",
+      "route_ref": "/quota",
+      "worker_ref": "atlas-quota-watch",
+      "classification": {
+        "lifecycle": "production",
+        "scope": "public",
+        "provenance": "original"
+      },
+      "assurance": {
+        "enabled": true,
+        "exclusion_reason": null
+      },
+      "notification_enabled": true,
+      "issue_creation_allowed": false,
+      "advisory_only": true
+    },
+    {
+      "service_id": "simple-proxy",
+      "repository": "AtlasReaper311/simple-proxy",
+      "provider": "cloudflare",
+      "quota_type": "workers-requests",
+      "unit": "requests",
+      "measurement_mode": "cumulative",
+      "free_tier_limit": null,
+      "warning_threshold_pct": 80,
+      "critical_threshold_pct": 95,
+      "projection_horizon_days": 7,
+      "cooldown_hours": 24,
+      "max_data_age_hours": 26,
+      "acceleration_threshold_pct": 50,
+      "owner": "AtlasReaper311",
+      "route_ref": null,
+      "worker_ref": null,
+      "classification": {
+        "lifecycle": "deprecated",
+        "scope": "internal",
+        "provenance": "external-derived"
+      },
+      "assurance": {
+        "enabled": false,
+        "exclusion_reason": "Deprecated, internal, external-derived repository; excluded from active cost guard by owner decision."
+      },
+      "notification_enabled": false,
+      "issue_creation_allowed": false,
+      "advisory_only": true
+    }
+  ]
+}
