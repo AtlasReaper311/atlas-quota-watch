@@ -1,0 +1,29 @@
+{
+  "schema_version": "atlas-cost-guard/quota-snapshot-set/v1",
+  "evaluation_time": "2026-07-14T20:00:00Z",
+  "snapshots": [
+    {
+      "schema_version": "atlas-cost-guard/quota-snapshot/v1",
+      "service_id": "aws-account",
+      "provider": "aws",
+      "quota_type": "monthly-spend",
+      "observed_at": "2026-07-14T20:00:00Z",
+      "period_start": "2026-07-01T00:00:00Z",
+      "period_end": "2026-08-01T00:00:00Z",
+      "usage": 0.12,
+      "quota_limit": 5,
+      "availability": "available",
+      "source": {
+        "kind": "aws-cli",
+        "name": "cost-explorer",
+        "collected_by": "AtlasReaper311/atlas-quota-watch"
+      },
+      "confidence": "high",
+      "classification": {
+        "lifecycle": "production",
+        "scope": "internal",
+        "provenance": "original"
+      }
+    }
+  ]
+}
