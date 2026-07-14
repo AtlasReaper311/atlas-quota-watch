@@ -20,6 +20,12 @@
 
 The Worker is read-only. It has no KV binding and no application state. Its only side effect is an alert through the existing notification router.
 
+Phase 5 adds a separate offline cost-guard engine and CLI. It consumes local,
+versioned policy and snapshot files, calculates current state and projections,
+emits Phase 1 `Finding` and `EvidenceEnvelope` records, and writes local JSON or
+Markdown reports. It does not call Cloudflare, send a notification, create an
+issue, change billing or limits, deploy, or shut down a service.
+
 ## What it measures
 
 | Meter | Included monthly amount |
@@ -45,6 +51,72 @@ A cumulative meter warns when either condition is true:
 KV storage is a point-in-time gauge. It is checked against the threshold but is not projected as a daily burn rate.
 
 Healthy checks are silent. Current data remains readable through `GET /quota`.
+Healthy meters now report `level: "healthy"`; they are no longer labelled as
+warnings merely because the field is present.
+
+## Offline cost guard
+
+The canonical policy and response runbooks live in
+[`atlas-infra`](https://github.com/AtlasReaper311/atlas-infra/tree/main/policy).
+This repository owns the quota snapshot schema, deterministic calculations,
+findings/evidence production, fixtures, and CLI.
+
+Each result includes current usage, quota limit, percentage consumed, remaining
+allowance, fixed and rolling daily burn, horizon projection, projected
+exhaustion and days remaining, evidence timestamp, freshness, source metadata,
+confidence, optional previous-period comparison and bounded top contributors,
+recommended advisory actions, and one shared state: `healthy`, `warning`,
+`failed`, `stale`, `unavailable`, or `unknown`.
+
+Rolling burn requires at least two current-period observations. Acceleration
+compares the two most recent adjacent intervals and requires three observations.
+With insufficient history the fixed-window arithmetic remains visible, but the
+projection/history state is explicit and the meter is not declared healthy.
+Gauges such as KV storage are never projected as cumulative counters.
+
+Run a complete offline fixture report from this repository:
+
+```bash
+node scripts/cost-guard.js \
+  --policy ../atlas-infra/policy/cost-guard.json \
+  --fixture test/fixtures/cost/healthy.json \
+  --report /tmp/cost-report.json \
+  --markdown /tmp/cost-report.md
+```
+
+Validate or inspect one layer at a time:
+
+```bash
+node scripts/cost-guard.js --policy ../atlas-infra/policy/cost-guard.json --validate-policy
+node scripts/cost-guard.js --policy ../atlas-infra/policy/cost-guard.json --fixture test/fixtures/cost/healthy.json --validate-snapshots
+node scripts/cost-guard.js --policy ../atlas-infra/policy/cost-guard.json --fixture test/fixtures/cost/healthy.json --state
+node scripts/cost-guard.js --policy test/fixtures/cost/policy.json --fixture test/fixtures/cost/projected-exhaustion.json --projections
+node scripts/cost-guard.js --policy test/fixtures/cost/policy.json --fixture test/fixtures/cost/warning.json --emit-findings
+```
+
+Fixture sets declare `evaluation_time`, so two identical runs are byte-for-byte
+stable. `--snapshots <directory>` reads only local `*.json` files in lexical
+order. `--previous-report` applies state-transition/cooldown deduplication. The
+resulting notification candidates always retain `dry_run: true`,
+`network_send: false`, `issue_creation: false`, and `advisory_only: true`.
+
+The implementation uses only Node's standard library and the existing
+repository dependencies. The MIT licence continues to cover it; no external
+or `simple-proxy` code is copied.
+
+### Failure behavior
+
+- stale data is `stale`, never healthy;
+- an unavailable source is `unavailable`;
+- malformed records emit redacted failure findings and are excluded from burn;
+- missing history, owner, limit, or policy identity is `unknown`;
+- conflicting lifecycle/scope/provenance is `failed`;
+- `simple-proxy` is reported as an informational exclusion and never evaluated,
+  notified, or used as an action target.
+
+The architecture, algorithm limits, future read-only provider adapter, rollback,
+and focused response runbooks are maintained in
+[`atlas-infra/docs/cost-guard.md`](https://github.com/AtlasReaper311/atlas-infra/blob/main/docs/cost-guard.md).
 
 ## Endpoints
 
@@ -65,6 +137,7 @@ Healthy checks are silent. Current data remains readable through `GET /quota`.
 ```bash
 npm ci
 npm run validate
+node scripts/cost-guard.js --policy ../atlas-infra/policy/cost-guard.json --fixture test/fixtures/cost/healthy.json --report /tmp/cost-report.json --markdown /tmp/cost-report.md
 ```
 
 ## First deployment

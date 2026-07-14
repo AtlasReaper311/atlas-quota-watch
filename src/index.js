@@ -270,14 +270,15 @@ async function fetchKvStorage(env, now) {
 export function analyzeMeter(meter, elapsedDays, totalDays, warnPct) {
   const pct = meter.limit > 0 ? meter.usage / meter.limit : 0;
   if (meter.point_in_time) {
+    const breach = pct >= warnPct;
     return {
       ...meter,
       pct: Math.round(pct * 1000) / 10,
       burn_per_day: null,
       projected_end_of_period: null,
       days_to_limit: null,
-      breach: pct >= warnPct,
-      level: pct >= 0.95 ? "failure" : "warning",
+      breach,
+      level: breach ? (pct >= 0.95 ? "failure" : "warning") : "healthy",
     };
   }
   const burnPerDay = meter.usage / Math.max(elapsedDays, 0.5);
@@ -292,7 +293,7 @@ export function analyzeMeter(meter, elapsedDays, totalDays, warnPct) {
     projected_end_of_period: Math.round(projected),
     days_to_limit: daysToLimit === null ? null : Math.round(daysToLimit * 10) / 10,
     breach,
-    level: pct >= 0.95 ? "failure" : "warning",
+    level: breach ? (pct >= 0.95 ? "failure" : "warning") : "healthy",
   };
 }
 

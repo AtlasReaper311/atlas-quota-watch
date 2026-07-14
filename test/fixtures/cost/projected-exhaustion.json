@@ -1,0 +1,75 @@
+{
+  "schema_version": "atlas-cost-guard/snapshot-set/v1",
+  "evaluation_time": "2026-07-14T12:00:00Z",
+  "snapshots": [
+    {
+      "schema_version": "atlas-cost-guard/quota-snapshot/v1",
+      "service_id": "atlas-quota-watch",
+      "provider": "cloudflare",
+      "quota_type": "workers-requests",
+      "observed_at": "2026-07-10T12:00:00Z",
+      "period_start": "2026-07-02T00:00:00Z",
+      "period_end": "2026-08-02T00:00:00Z",
+      "usage": 6000000,
+      "quota_limit": null,
+      "availability": "available",
+      "source": {
+        "kind": "fixture",
+        "name": "projected-1",
+        "collected_by": "AtlasReaper311/atlas-quota-watch"
+      },
+      "confidence": "high",
+      "classification": {
+        "lifecycle": "production",
+        "scope": "public",
+        "provenance": "original"
+      }
+    },
+    {
+      "schema_version": "atlas-cost-guard/quota-snapshot/v1",
+      "service_id": "atlas-quota-watch",
+      "provider": "cloudflare",
+      "quota_type": "workers-requests",
+      "observed_at": "2026-07-12T12:00:00Z",
+      "period_start": "2026-07-02T00:00:00Z",
+      "period_end": "2026-08-02T00:00:00Z",
+      "usage": 6800000,
+      "quota_limit": null,
+      "availability": "available",
+      "source": {
+        "kind": "fixture",
+        "name": "projected-2",
+        "collected_by": "AtlasReaper311/atlas-quota-watch"
+      },
+      "confidence": "high",
+      "classification": {
+        "lifecycle": "production",
+        "scope": "public",
+        "provenance": "original"
+      }
+    },
+    {
+      "schema_version": "atlas-cost-guard/quota-snapshot/v1",
+      "service_id": "atlas-quota-watch",
+      "provider": "cloudflare",
+      "quota_type": "workers-requests",
+      "observed_at": "2026-07-14T12:00:00Z",
+      "period_start": "2026-07-02T00:00:00Z",
+      "period_end": "2026-08-02T00:00:00Z",
+      "usage": 7600000,
+      "quota_limit": null,
+      "availability": "available",
+      "source": {
+        "kind": "fixture",
+        "name": "projected-3",
+        "collected_by": "AtlasReaper311/atlas-quota-watch"
+      },
+      "confidence": "high",
+      "classification": {
+        "lifecycle": "production",
+        "scope": "public",
+        "provenance": "original"
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "schema_version": "atlas-cost-guard/policy/v1",
+  "owner": "AtlasReaper311/atlas-infra",
+  "services": "not-an-array"
+}

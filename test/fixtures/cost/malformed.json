@@ -1,0 +1,28 @@
+{
+  "schema_version": "atlas-cost-guard/snapshot-set/v1",
+  "evaluation_time": "2026-07-14T12:00:00Z",
+  "snapshots": [
+    {
+      "schema_version": "atlas-cost-guard/quota-snapshot/v1",
+      "service_id": "atlas-quota-watch",
+      "provider": "cloudflare",
+      "quota_type": "workers-requests",
+      "period_start": "2026-07-02T00:00:00Z",
+      "period_end": "2026-08-02T00:00:00Z",
+      "usage": "not-a-number",
+      "quota_limit": null,
+      "availability": "available",
+      "source": {
+        "kind": "fixture",
+        "name": "malformed",
+        "collected_by": "AtlasReaper311/atlas-quota-watch"
+      },
+      "confidence": "unknown",
+      "classification": {
+        "lifecycle": "production",
+        "scope": "public",
+        "provenance": "original"
+      }
+    }
+  ]
+}

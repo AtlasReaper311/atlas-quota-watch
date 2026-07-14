@@ -7,9 +7,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "check": "node --check src/index.js && node --check src/_meta.js && node --check src/notify.js",
+    "check": "node --check src/index.js && node --check src/_meta.js && node --check src/notify.js && node --check src/json-schema.js && node --check src/cost-guard.js && node --check scripts/cost-guard.js",
     "test": "node --test",
     "validate": "npm run check && npm test && wrangler deploy --dry-run --env=\"\" --outdir dist",
+    "cost-guard": "node scripts/cost-guard.js",
     "dev": "wrangler dev --env dev",
     "deploy": "wrangler deploy"
   },
