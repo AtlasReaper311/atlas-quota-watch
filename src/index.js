@@ -43,6 +43,27 @@ export const META = {
 
 const GRAPHQL_ENDPOINT = "https://api.cloudflare.com/client/v4/graphql";
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CLIENT_CACHE_TTL_SECONDS = 300;
+const FRESH_CACHE_TTL_SECONDS = 60 * 60;
+const STALE_CACHE_TTL_SECONDS = 24 * 60 * 60;
+const RATE_LIMIT_COOLDOWN_SECONDS = 5 * 60;
+const MAX_RETRY_AFTER_SECONDS = 60 * 60;
+
+export const CACHE_URLS = Object.freeze({
+  fresh: "https://atlas-quota-watch.internal/quota",
+  stale: "https://atlas-quota-watch.internal/quota/stale",
+  cooldown: "https://atlas-quota-watch.internal/quota/rate-limit",
+});
+
+export class AnalyticsApiError extends Error {
+  constructor(message, options = {}) {
+    super(message, options.cause ? { cause: options.cause } : undefined);
+    this.name = "AnalyticsApiError";
+    this.status = options.status ?? null;
+    this.source = options.source ?? "unknown";
+    this.retryAfterSeconds = options.retryAfterSeconds ?? null;
+  }
+}
 
 function positiveNumber(env, name) {
   const value = Number(env[name]);
@@ -101,36 +122,108 @@ function isoDate(d) {
   return d.toISOString().slice(0, 10);
 }
 
-/**
- * One POST to the GraphQL endpoint. Errors surface as a thrown Error
- * whose message carries the GraphQL error text; the token itself is
- * never part of any error path.
- */
-async function gql(env, query, variables) {
-  const res = await fetch(GRAPHQL_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${env.CF_ANALYTICS_TOKEN}`,
-    },
-    body: JSON.stringify({ query, variables }),
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!res.ok) {
-    throw new Error(`analytics API returned http ${res.status}`);
+export function safeErrorMessage(error) {
+  return String(error?.message || "unknown analytics failure")
+    .replace(/\s+/g, " ")
+    .slice(0, 300);
+}
+
+export function parseRetryAfterSeconds(value, fallback = RATE_LIMIT_COOLDOWN_SECONDS) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, MAX_RETRY_AFTER_SECONDS);
+}
+
+function isRateLimitMessage(message) {
+  return /rate limit|rate limiter|too many queries|excessive resources/i.test(message);
+}
+
+async function responseErrorDetail(response) {
+  let text;
+  try {
+    text = await response.text();
+  } catch {
+    return "";
   }
-  const doc = await res.json();
-  if (doc.errors && doc.errors.length) {
-    throw new Error(
-      `analytics query failed: ${doc.errors
-        .map((e) => e.message)
-        .join("; ")
-        .slice(0, 300)}`,
+  if (!text) return "";
+
+  try {
+    const doc = JSON.parse(text);
+    const messages = Array.isArray(doc?.errors)
+      ? doc.errors
+          .map((entry) => String(entry?.message || "").trim())
+          .filter(Boolean)
+      : [];
+    if (messages.length > 0) return messages.join("; ").slice(0, 300);
+  } catch {
+    // Fall back to a bounded plain-text description below.
+  }
+
+  return text.replace(/\s+/g, " ").slice(0, 300);
+}
+
+/**
+ * One POST to the GraphQL endpoint. Errors carry a bounded diagnostic,
+ * dataset identity, status, and cooldown hint without exposing secrets.
+ */
+export async function requestAnalytics(env, source, query, variables) {
+  let response;
+  try {
+    response = await fetch(GRAPHQL_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${env.CF_ANALYTICS_TOKEN}`,
+      },
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (error) {
+    throw new AnalyticsApiError(
+      `${source}: analytics request failed: ${safeErrorMessage(error)}`,
+      { source, cause: error },
     );
   }
+
+  if (!response.ok) {
+    const detail = await responseErrorDetail(response);
+    const suffix = detail ? `: ${detail}` : "";
+    throw new AnalyticsApiError(
+      `${source}: analytics API returned http ${response.status}${suffix}`,
+      {
+        status: response.status,
+        source,
+        retryAfterSeconds:
+          response.status === 429
+            ? parseRetryAfterSeconds(response.headers.get("retry-after"))
+            : null,
+      },
+    );
+  }
+
+  const doc = await response.json();
+  if (doc.errors && doc.errors.length) {
+    const detail = doc.errors
+      .map((entry) => entry.message)
+      .join("; ")
+      .slice(0, 300);
+    const rateLimited = isRateLimitMessage(detail);
+    throw new AnalyticsApiError(
+      `${source}: analytics query failed: ${detail}`,
+      {
+        status: rateLimited ? 429 : 502,
+        source,
+        retryAfterSeconds: rateLimited ? RATE_LIMIT_COOLDOWN_SECONDS : null,
+      },
+    );
+  }
+
   const account = doc?.data?.viewer?.accounts?.[0];
   if (!account) {
-    throw new Error("analytics query returned no account node");
+    throw new AnalyticsApiError(
+      `${source}: analytics query returned no account node`,
+      { status: 502, source },
+    );
   }
   return account;
 }
@@ -181,7 +274,7 @@ query KvStorage($accountTag: string!, $start: Date!, $end: Date!) {
 }`;
 
 async function fetchWorkersUsage(env, period, now) {
-  const account = await gql(env, WORKERS_QUERY, {
+  const account = await requestAnalytics(env, "workers_analytics", WORKERS_QUERY, {
     accountTag: env.CF_ACCOUNT_TAG,
     start: period.start.toISOString(),
     end: now.toISOString(),
@@ -190,12 +283,12 @@ async function fetchWorkersUsage(env, period, now) {
   let requests = 0;
   let errors = 0;
   const perScript = [];
-  for (const g of groups) {
-    requests += g.sum?.requests ?? 0;
-    errors += g.sum?.errors ?? 0;
+  for (const group of groups) {
+    requests += group.sum?.requests ?? 0;
+    errors += group.sum?.errors ?? 0;
     perScript.push({
-      script: g.dimensions?.scriptName ?? "unknown",
-      requests: g.sum?.requests ?? 0,
+      script: group.dimensions?.scriptName ?? "unknown",
+      requests: group.sum?.requests ?? 0,
     });
   }
   perScript.sort((a, b) => b.requests - a.requests);
@@ -203,16 +296,16 @@ async function fetchWorkersUsage(env, period, now) {
 }
 
 async function fetchKvOps(env, period, now) {
-  const account = await gql(env, KV_OPS_QUERY, {
+  const account = await requestAnalytics(env, "kv_operations", KV_OPS_QUERY, {
     accountTag: env.CF_ACCOUNT_TAG,
     start: isoDate(period.start),
     end: isoDate(now),
   });
   const groups = account.kvOperationsAdaptiveGroups ?? [];
   const ops = { read: 0, write: 0, delete: 0, list: 0 };
-  for (const g of groups) {
-    const action = g.dimensions?.actionType;
-    if (action in ops) ops[action] += g.sum?.requests ?? 0;
+  for (const group of groups) {
+    const action = group.dimensions?.actionType;
+    if (action in ops) ops[action] += group.sum?.requests ?? 0;
   }
   return ops;
 }
@@ -225,22 +318,22 @@ async function fetchKvOps(env, period, now) {
  */
 async function fetchKvStorage(env, now) {
   const twoDaysAgo = new Date(now.getTime() - 2 * DAY_MS);
-  const account = await gql(env, KV_STORAGE_QUERY, {
+  const account = await requestAnalytics(env, "kv_storage", KV_STORAGE_QUERY, {
     accountTag: env.CF_ACCOUNT_TAG,
     start: isoDate(twoDaysAgo),
     end: isoDate(now),
   });
   const groups = account.kvStorageAdaptiveGroups ?? [];
   const latest = new Map();
-  for (const g of groups) {
-    const ns = g.dimensions?.namespaceId ?? "unknown";
-    const date = g.dimensions?.date ?? "";
-    const prev = latest.get(ns);
-    if (!prev || date > prev.date) {
-      latest.set(ns, {
+  for (const group of groups) {
+    const namespace = group.dimensions?.namespaceId ?? "unknown";
+    const date = group.dimensions?.date ?? "";
+    const previous = latest.get(namespace);
+    if (!previous || date > previous.date) {
+      latest.set(namespace, {
         date,
-        bytes: g.max?.byteCount ?? 0,
-        keys: g.max?.keyCount ?? 0,
+        bytes: group.max?.byteCount ?? 0,
+        keys: group.max?.keyCount ?? 0,
       });
     }
   }
@@ -305,11 +398,11 @@ export async function computeQuota(env) {
   const totalDays = (period.end.getTime() - period.start.getTime()) / DAY_MS;
   const daysLeft = Math.max(totalDays - elapsedDays, 0);
 
-  const [workers, kvOps, kvStorage] = await Promise.all([
-    fetchWorkersUsage(env, period, now),
-    fetchKvOps(env, period, now),
-    fetchKvStorage(env, now),
-  ]);
+  // Run sequentially. A rate-limit response stops the remaining calls instead
+  // of allowing two more GraphQL requests to continue inside Promise.all().
+  const workers = await fetchWorkersUsage(env, period, now);
+  const kvOps = await fetchKvOps(env, period, now);
+  const kvStorage = await fetchKvStorage(env, now);
 
   const warnPct = config.threshold;
   const rawMeters = [
@@ -352,8 +445,8 @@ export async function computeQuota(env) {
     },
   ];
 
-  const meters = rawMeters.map((m) =>
-    analyzeMeter(m, elapsedDays, totalDays, warnPct),
+  const meters = rawMeters.map((meter) =>
+    analyzeMeter(meter, elapsedDays, totalDays, warnPct),
   );
 
   return {
@@ -382,24 +475,40 @@ function formatCount(n) {
   return String(n);
 }
 
+function failureFields(error) {
+  const fields = {
+    error_type: error?.name || "Error",
+    error_message: safeErrorMessage(error),
+  };
+  if (error?.source) fields.source = error.source;
+  if (Number.isInteger(error?.status)) fields.http_status = String(error.status);
+  if (Number.isFinite(error?.retryAfterSeconds)) {
+    fields.retry_after_seconds = String(error.retryAfterSeconds);
+  }
+  return fields;
+}
+
 async function runCheck(env) {
   let snapshot;
   try {
     snapshot = await computeQuota(env);
-  } catch (err) {
-    console.log("quota check failed:", err.message);
+  } catch (error) {
+    const rateLimited = error?.status === 429;
+    console.error("quota check failed", failureFields(error));
     await notify(env, {
-      level: "failure",
-      title: "Quota watch could not read account analytics",
-      message:
-        "The usage check failed before producing any numbers. " +
-        "The watchdog is blind until this is fixed.",
-      fields: { error: err.name || "Error" },
+      level: rateLimited ? "warning" : "failure",
+      title: rateLimited
+        ? "Quota watch analytics rate limited"
+        : "Quota watch could not read account analytics",
+      message: rateLimited
+        ? "Cloudflare rejected the analytics query budget. The next scheduled check will retry; no quota breach was inferred from the failed read."
+        : "The usage check failed before producing any numbers. The watchdog is blind until the analytics read succeeds.",
+      fields: failureFields(error),
     });
     return;
   }
 
-  const breaches = snapshot.meters.filter((m) => m.breach);
+  const breaches = snapshot.meters.filter((meter) => meter.breach);
   if (breaches.length === 0) {
     console.log(
       "quota check: all meters healthy,",
@@ -409,26 +518,26 @@ async function runCheck(env) {
     return;
   }
 
-  const worst = breaches.some((m) => m.level === "failure")
+  const worst = breaches.some((meter) => meter.level === "failure")
     ? "failure"
     : "warning";
-  const lines = breaches.map((m) => {
-    const eta = m.point_in_time
+  const lines = breaches.map((meter) => {
+    const eta = meter.point_in_time
       ? "point-in-time gauge, threshold breach"
-      : m.days_to_limit === null
+      : meter.days_to_limit === null
         ? "no burn recorded, static usage"
-        : `~${m.days_to_limit}d to ceiling at current burn`;
-    return `${m.label}: ${formatCount(m.usage)} of ${formatCount(m.limit)} (${m.pct}%), ${eta}`;
+        : `~${meter.days_to_limit}d to ceiling at current burn`;
+    return `${meter.label}: ${formatCount(meter.usage)} of ${formatCount(meter.limit)} (${meter.pct}%), ${eta}`;
   });
   const fields = {
     period_days_left: `${snapshot.period.days_left}`,
     period_ends: snapshot.period.end.slice(0, 10),
     snapshot: "https://api.atlas-systems.uk/quota",
   };
-  for (const m of breaches.slice(0, 4)) {
-    fields[m.id] = m.point_in_time
-      ? `${m.pct}% of ceiling in use now`
-      : `${m.pct}% used, projected ${formatCount(m.projected_end_of_period)} by period end`;
+  for (const meter of breaches.slice(0, 4)) {
+    fields[meter.id] = meter.point_in_time
+      ? `${meter.pct}% of ceiling in use now`
+      : `${meter.pct}% used, projected ${formatCount(meter.projected_end_of_period)} by period end`;
   }
 
   await notify(env, {
@@ -439,39 +548,222 @@ async function runCheck(env) {
   });
 }
 
-async function serveQuota(request, env, ctx) {
-  const cache = globalThis.caches ? globalThis.caches.default : null;
-  const cacheKey = new Request("https://atlas-quota-watch.internal/quota");
-  if (cache) {
-    const hit = await cache.match(cacheKey);
-    if (hit) return hit;
-  }
+function cacheKey(url) {
+  return new Request(url);
+}
 
-  let body;
-  let status = 200;
-  try {
-    body = await computeQuota(env);
-  } catch (err) {
-    console.log("quota snapshot failed:", err.message);
-    body = { ok: false, error: err.name || "Error" };
-    status = 502;
-  }
-
-  const res = new Response(JSON.stringify(body), {
+function jsonResponse(body, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(body), {
     status,
     headers: {
       "content-type": "application/json",
       "access-control-allow-origin": "*",
-      // Five minutes of edge cache keeps the public endpoint from
-      // spending the GraphQL API's own rate budget; the underlying
-      // datasets are daily-to-hourly grained, so nothing is lost.
-      "cache-control": "public, max-age=300",
+      ...extraHeaders,
     },
   });
-  if (cache && status === 200 && ctx) {
-    ctx.waitUntil(cache.put(cacheKey, res.clone()));
+}
+
+function responseWithHeaders(response, extraHeaders) {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(extraHeaders)) {
+    headers.set(name, value);
   }
-  return res;
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function cacheSnapshotResponse(body, ttlSeconds) {
+  return jsonResponse(body, 200, {
+    "cache-control": `public, max-age=${ttlSeconds}`,
+  });
+}
+
+function schedule(ctx, promise) {
+  if (ctx) {
+    ctx.waitUntil(promise);
+    return;
+  }
+  return promise;
+}
+
+async function staleSnapshotResponse(cache, reason, retryAfterSeconds = null) {
+  if (!cache) return null;
+  const stale = await cache.match(cacheKey(CACHE_URLS.stale));
+  if (!stale) return null;
+
+  let body;
+  try {
+    body = await stale.json();
+  } catch {
+    return null;
+  }
+
+  const degraded = {
+    ...body,
+    degraded: true,
+    freshness: "stale",
+    stale_reason: reason,
+    served_at: new Date().toISOString(),
+  };
+  if (Number.isFinite(retryAfterSeconds)) {
+    degraded.retry_after_seconds = retryAfterSeconds;
+  }
+
+  return jsonResponse(degraded, 200, {
+    "cache-control": "no-store",
+    "x-atlas-cache": "stale",
+    warning: '110 - "Response is stale"',
+  });
+}
+
+function unavailableResponse(error, status = 502) {
+  const retryAfterSeconds = Number.isFinite(error?.retryAfterSeconds)
+    ? error.retryAfterSeconds
+    : null;
+  const headers = {
+    "cache-control": "no-store",
+    "x-atlas-cache": "unavailable",
+  };
+  if (retryAfterSeconds !== null) {
+    headers["retry-after"] = String(retryAfterSeconds);
+  }
+  return jsonResponse(
+    {
+      ok: false,
+      error: error?.name || "Error",
+      degraded: true,
+      retry_after_seconds: retryAfterSeconds,
+    },
+    status,
+    headers,
+  );
+}
+
+export async function serveQuota(_request, env, ctx) {
+  const cache = globalThis.caches?.default ?? null;
+  const freshKey = cacheKey(CACHE_URLS.fresh);
+  const staleKey = cacheKey(CACHE_URLS.stale);
+  const cooldownKey = cacheKey(CACHE_URLS.cooldown);
+
+  if (cache) {
+    const fresh = await cache.match(freshKey);
+    if (fresh) {
+      const staleSeed = fresh.clone();
+      const staleHeaders = new Headers(staleSeed.headers);
+      staleHeaders.set(
+        "cache-control",
+        `public, max-age=${STALE_CACHE_TTL_SECONDS}`,
+      );
+      schedule(
+        ctx,
+        cache.put(
+          staleKey,
+          new Response(staleSeed.body, {
+            status: staleSeed.status,
+            statusText: staleSeed.statusText,
+            headers: staleHeaders,
+          }),
+        ),
+      );
+      return responseWithHeaders(fresh, {
+        "cache-control": `public, max-age=${CLIENT_CACHE_TTL_SECONDS}`,
+        "x-atlas-cache": "fresh",
+      });
+    }
+
+    const cooldown = await cache.match(cooldownKey);
+    if (cooldown) {
+      let retryAfterSeconds = RATE_LIMIT_COOLDOWN_SECONDS;
+      try {
+        const marker = await cooldown.json();
+        retryAfterSeconds = parseRetryAfterSeconds(
+          marker?.retry_after_seconds,
+          RATE_LIMIT_COOLDOWN_SECONDS,
+        );
+      } catch {
+        // Use the fixed GraphQL cooldown when the marker is unreadable.
+      }
+      const stale = await staleSnapshotResponse(
+        cache,
+        "analytics_rate_limited",
+        retryAfterSeconds,
+      );
+      if (stale) return stale;
+      return unavailableResponse(
+        new AnalyticsApiError("analytics rate-limit cooldown active", {
+          status: 429,
+          source: "cache_cooldown",
+          retryAfterSeconds,
+        }),
+        503,
+      );
+    }
+  }
+
+  let body;
+  try {
+    body = await computeQuota(env);
+  } catch (error) {
+    console.error("quota snapshot failed", failureFields(error));
+
+    if (error?.status === 429) {
+      const retryAfterSeconds = parseRetryAfterSeconds(
+        error.retryAfterSeconds,
+        RATE_LIMIT_COOLDOWN_SECONDS,
+      );
+      if (cache) {
+        schedule(
+          ctx,
+          cache.put(
+            cooldownKey,
+            jsonResponse(
+              {
+                active: true,
+                retry_after_seconds: retryAfterSeconds,
+                created_at: new Date().toISOString(),
+              },
+              200,
+              { "cache-control": `public, max-age=${retryAfterSeconds}` },
+            ),
+          ),
+        );
+      }
+      const stale = await staleSnapshotResponse(
+        cache,
+        "analytics_rate_limited",
+        retryAfterSeconds,
+      );
+      if (stale) return stale;
+      return unavailableResponse(error, 503);
+    }
+
+    const stale = await staleSnapshotResponse(cache, "analytics_unavailable");
+    if (stale) return stale;
+    return unavailableResponse(error, 502);
+  }
+
+  if (cache) {
+    const writes = [
+      cache.put(
+        freshKey,
+        cacheSnapshotResponse(body, FRESH_CACHE_TTL_SECONDS),
+      ),
+      cache.put(
+        staleKey,
+        cacheSnapshotResponse(body, STALE_CACHE_TTL_SECONDS),
+      ),
+      cache.delete(cooldownKey),
+    ];
+    schedule(ctx, Promise.all(writes));
+  }
+
+  return jsonResponse(body, 200, {
+    "cache-control": `public, max-age=${CLIENT_CACHE_TTL_SECONDS}`,
+    "x-atlas-cache": "miss",
+  });
 }
 
 export default {
@@ -482,10 +774,7 @@ export default {
     if (meta) return meta;
 
     if (request.method !== "GET") {
-      return new Response(JSON.stringify({ error: "method not allowed" }), {
-        status: 405,
-        headers: { "content-type": "application/json" },
-      });
+      return jsonResponse({ error: "method not allowed" }, 405);
     }
 
     // Route pattern is api.atlas-systems.uk/quota*, so the only valid
@@ -494,10 +783,7 @@ export default {
       return serveQuota(request, env, ctx);
     }
 
-    return new Response(
-      JSON.stringify({ error: "not found", see: "/quota" }),
-      { status: 404, headers: { "content-type": "application/json" } },
-    );
+    return jsonResponse({ error: "not found", see: "/quota" }, 404);
   },
 
   async scheduled(_event, env, ctx) {
